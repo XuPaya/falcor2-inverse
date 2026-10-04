@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falcor2-inverse"
+version = "0.1.0"
+description = "Inverse rendering with falcor2's path-space differentiable renderer from PyTorch"
+requires-python = ">=3.10"
+# falcor2 (branch psdr-falcor2) and slangpy come with falcor2's Python environment.
+dependencies = ["numpy", "pillow", "torch"]
+
+[tool.setuptools.packages.find]
+include = ["falcor2_inverse*"]
+
+[tool.setuptools.package-data]
+falcor2_inverse = ["shaders/*.slang"]

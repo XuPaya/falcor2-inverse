@@ -1,0 +1,97 @@
+<!-- A Cornell box made of Mitsuba 3's rectangle and cube shapes (y up), for falcor2_inverse's Mitsuba loader. -->
+<scene version="3.0.0">
+    <default name="spp" value="256"/>
+    <default name="resolution" value="256"/>
+
+    <integrator type="path">
+        <integer name="max_depth" value="4"/>
+    </integrator>
+
+    <sensor type="perspective">
+        <float name="fov" value="39.3"/>
+        <transform name="to_world">
+            <lookat origin="0, 0, 3.9" target="0, 0, 0" up="0, 1, 0"/>
+        </transform>
+        <sampler type="independent">
+            <integer name="sample_count" value="$spp"/>
+        </sampler>
+        <film type="hdrfilm">
+            <integer name="width" value="$resolution"/>
+            <integer name="height" value="$resolution"/>
+        </film>
+    </sensor>
+
+    <bsdf type="diffuse" id="white">
+        <rgb name="reflectance" value="0.73, 0.73, 0.73"/>
+    </bsdf>
+    <bsdf type="diffuse" id="red">
+        <rgb name="reflectance" value="0.63, 0.065, 0.05"/>
+    </bsdf>
+    <bsdf type="diffuse" id="green">
+        <rgb name="reflectance" value="0.14, 0.45, 0.091"/>
+    </bsdf>
+
+    <shape type="rectangle" id="floor">
+        <transform name="to_world">
+            <rotate x="1" angle="-90"/>
+            <translate y="-1"/>
+        </transform>
+        <ref id="white"/>
+    </shape>
+    <shape type="rectangle" id="ceiling">
+        <transform name="to_world">
+            <rotate x="1" angle="90"/>
+            <translate y="1"/>
+        </transform>
+        <ref id="white"/>
+    </shape>
+    <shape type="rectangle" id="back_wall">
+        <transform name="to_world">
+            <translate z="-1"/>
+        </transform>
+        <ref id="white"/>
+    </shape>
+    <shape type="rectangle" id="left_wall">
+        <transform name="to_world">
+            <rotate y="1" angle="90"/>
+            <translate x="-1"/>
+        </transform>
+        <ref id="red"/>
+    </shape>
+    <shape type="rectangle" id="right_wall">
+        <transform name="to_world">
+            <rotate y="1" angle="-90"/>
+            <translate x="1"/>
+        </transform>
+        <ref id="green"/>
+    </shape>
+    <shape type="cube" id="tall_box">
+        <transform name="to_world">
+            <scale x="0.3" y="0.6" z="0.3"/>
+            <rotate y="1" angle="20"/>
+            <translate x="-0.33" y="-0.4" z="-0.28"/>
+        </transform>
+        <ref id="white"/>
+    </shape>
+    <shape type="cube" id="short_box">
+        <transform name="to_world">
+            <scale value="0.3"/>
+            <rotate y="1" angle="-18"/>
+            <translate x="0.33" y="-0.7" z="0.3"/>
+        </transform>
+        <ref id="white"/>
+    </shape>
+    <shape type="rectangle" id="light">
+        <transform name="to_world">
+            <scale x="0.23" y="0.19"/>
+            <rotate x="1" angle="90"/>
+            <translate y="0.99"/>
+        </transform>
+        <bsdf type="diffuse">
+            <rgb name="reflectance" value="0.78, 0.78, 0.78"/>
+        </bsdf>
+        <emitter type="area">
+            <rgb name="radiance" value="17, 12, 4"/>
+        </emitter>
+    </shape>
+</scene>

@@ -1,0 +1,8 @@
+results/
+__pycache__/
+.pytest_cache/
+.shader-cache/
+.temp/
+*.egg-info/
+build/
+tests/
