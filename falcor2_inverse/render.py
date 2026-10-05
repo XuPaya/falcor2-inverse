@@ -22,12 +22,18 @@ class Renderer:
     spp: samples per pixel of the image; grad_spp: of its derivative (default: spp). max_bounces: path length.
     terms: the PSDR terms of gradients (default: all four when geometry or lights move, else only "interior").
     photon_radius: PSDR's photon radius for shadow and reflected-silhouette edges (default: scene-relative).
+    vertex_grad_clamp: bound of each path sample's interior-term vertex gradient, relative to its contribution per
+    scene extent (heavy-tailed near sharp glossy lobes; default: PSDR's, 0: off).
+    light_sampler: the falcor2 light sampler of next-event estimation (default: PSDR's f2.PowerLightSampler, which
+    weights lights by emitted power and so starves small lights next to a distant sun disk; f2.UniformLightSampler
+    picks every light, and every emissive triangle, alike).
     """
 
     def __init__(self, scene, camera=None, spp=4, grad_spp=None, max_bounces=2, terms=None, photon_radius=None,
-                 seed=0):
+                 seed=0, light_sampler=None, vertex_grad_clamp=None):
         self.scene, self.spp, self.grad_spp, self.max_bounces = scene, spp, grad_spp, max_bounces
-        self.terms, self.photon_radius, self.seed = terms, photon_radius, seed
+        self.terms, self.photon_radius, self.seed, self.light_sampler = terms, photon_radius, seed, light_sampler
+        self.vertex_grad_clamp = vertex_grad_clamp
         self.camera = self._camera(camera) if camera is not None else None
         self._psdr, self._version = {}, None
 
@@ -53,7 +59,8 @@ class Renderer:
         psdr = self._psdr.get(size)
         if psdr is None:
             psdr = self._psdr[size] = PSDR(scene.device, scene.f2, camera, max_bounces=self.max_bounces,
-                                           photon_radius=self.photon_radius)
+                                           photon_radius=self.photon_radius, light_sampler=self.light_sampler,
+                                           vertex_grad_clamp=self.vertex_grad_clamp)
         else:
             state, geometry_state, current = psdr.refreshed
             if current is not camera:

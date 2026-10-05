@@ -92,13 +92,21 @@ and `trainable()` help select what to optimize; `scene.set_parameters(values)` w
 
 ## Rendering
 
-`fi.Renderer(scene, camera=None, spp=4, grad_spp=None, max_bounces=2, terms=None, photon_radius=None)` renders
+`fi.Renderer(scene, camera=None, spp=4, grad_spp=None, max_bounces=2, terms=None, photon_radius=None,
+light_sampler=None)` renders
 from a camera (the scene's first by default, or one chosen per call: `renderer(params, camera="view1")`) and
 returns the linear radiance (H, W, 3). Each call uses new random samples, and the derivative is estimated with
 samples independent of the image's, so that gradients of losses like `mse(image, target)` are unbiased.
 Gradients come from PSDR's four terms: `interior` (shading), `pixel` (pixel-boundary edges), `primary`
 (silhouettes seen by the camera) and `secondary` (shadows and reflected silhouettes, by photon mapping). By
 default all four are used when geometry or lights move, and only `interior` otherwise; `terms` selects them.
+`light_sampler` picks the lights of next-event estimation: the default `f2.PowerLightSampler` weights lights by
+emitted power, so a distant sun disk starves small area lights (their light and gradients become a few fireflies);
+`f2.UniformLightSampler()` picks every light alike (and every emissive triangle, so not with emissive meshes).
+`vertex_grad_clamp` (default 0 = off) bounds each path sample's interior-term vertex gradient relative to its
+contribution per scene extent: sharp glossy lobes make geometry derivatives heavy-tailed in multi-bounce scenes, and
+values of 3-10 tame them, but the clamp also cuts legitimate near-field signal (surfaces a few cm apart), so check a
+clamped gradient against finite differences for the scene.
 PSDR samples antithetically: each pixel-boundary sample comes with its three mirror images on the pixel's perimeter,
 and a camera path whose first vertex samples a glossy reflection is paired with a path whose sample there is turned
 by half a turn about the lobe, which cuts the variance of geometry derivatives of glossy objects several-fold
