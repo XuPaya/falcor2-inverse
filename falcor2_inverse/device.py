@@ -14,12 +14,16 @@ def create_device(shader_cache: bool = True) -> spy.Device:
     """D3D12 device with falcor2's shader include paths and a persistent shader cache (.shader-cache/).
 
     PSDR kernels for scenes with OpenPBR materials take minutes to compile (more with shader debug info, which
-    this device leaves off); the cache compiles each of them once.
+    this device leaves off); the cache compiles each of them once.  One scene configuration (material types, light
+    sampler, normal maps) takes ~14 MiB with all PSDR kernels but ~8 min to compile, and slangpy's default cache
+    size (128 MiB, eviction from 70%) holds only ~6 of them, so experiments evicted and recompiled each other's
+    kernels.  1 GiB holds ~50; the LMDB file grows only as entries are written.
     """
     root = Path(__file__).resolve().parents[1]
     return spy.Device(
         type=spy.DeviceType.d3d12,
         shader_cache_path=root / ".shader-cache" if shader_cache else None,
+        shader_cache_size=1 << 30,
         compiler_options=spy.SlangCompilerOptions({
             "include_paths": get_slang_include_paths() + [Path(__file__).resolve().parent / "shaders"]}),
     )
