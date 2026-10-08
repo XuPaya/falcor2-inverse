@@ -22,6 +22,8 @@ class Renderer:
     spp: samples per pixel of the image; grad_spp: of its derivative (default: spp). max_bounces: path length.
     terms: the PSDR terms of gradients (default: all four when geometry or lights move, else only "interior").
     photon_radius: PSDR's photon radius for shadow and reflected-silhouette edges (default: scene-relative).
+    check_visibility: let PSDR drop edge photons hidden from the receiver or the source (default off; large radii in
+    cluttered scenes otherwise gather hidden silhouette edges and overestimate shadow-edge derivatives).
     vertex_grad_clamp: bound of each path sample's interior-term vertex gradient, relative to its contribution per
     scene extent (heavy-tailed near sharp glossy lobes; default: PSDR's, 0: off).
     light_sampler: the falcor2 light sampler of next-event estimation (default: PSDR's f2.PowerLightSampler, which
@@ -30,10 +32,10 @@ class Renderer:
     """
 
     def __init__(self, scene, camera=None, spp=4, grad_spp=None, max_bounces=2, terms=None, photon_radius=None,
-                 seed=0, light_sampler=None, vertex_grad_clamp=None):
+                 seed=0, light_sampler=None, vertex_grad_clamp=None, check_visibility=False):
         self.scene, self.spp, self.grad_spp, self.max_bounces = scene, spp, grad_spp, max_bounces
         self.terms, self.photon_radius, self.seed, self.light_sampler = terms, photon_radius, seed, light_sampler
-        self.vertex_grad_clamp = vertex_grad_clamp
+        self.vertex_grad_clamp, self.check_visibility = vertex_grad_clamp, check_visibility
         self.camera = self._camera(camera) if camera is not None else None
         self._psdr, self._version = {}, None
 
@@ -60,7 +62,8 @@ class Renderer:
         if psdr is None:
             psdr = self._psdr[size] = PSDR(scene.device, scene.f2, camera, max_bounces=self.max_bounces,
                                            photon_radius=self.photon_radius, light_sampler=self.light_sampler,
-                                           vertex_grad_clamp=self.vertex_grad_clamp)
+                                           vertex_grad_clamp=self.vertex_grad_clamp,
+                                           check_visibility=self.check_visibility)
         else:
             state, geometry_state, current = psdr.refreshed
             if current is not camera:
