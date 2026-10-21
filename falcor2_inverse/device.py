@@ -1,5 +1,6 @@
 """The falcor2 device (D3D12) and the PyTorch device that parameters and images live on."""
 
+import os
 from pathlib import Path
 
 import slangpy as spy
@@ -25,8 +26,21 @@ def create_device(shader_cache: bool = True) -> spy.Device:
         shader_cache_path=root / ".shader-cache" if shader_cache else None,
         shader_cache_size=1 << 30,
         compiler_options=spy.SlangCompilerOptions({
-            "include_paths": get_slang_include_paths() + [Path(__file__).resolve().parent / "shaders"]}),
+            "include_paths": get_slang_include_paths() + [Path(__file__).resolve().parent / "shaders"],
+            "floating_point_mode": floating_point_mode()}),
     )
+
+
+def floating_point_mode() -> spy.SlangFloatingPointMode:
+    """Floating-point mode of every kernel of the device: environment variable FALCOR2_FP_MODE = precise (default),
+    default (Slang's default) or fast. Precise (no contraction into fused multiply-adds) makes PSDR's primal bitwise
+    identical to the forward path tracer at the same seed: otherwise the same expressions are contracted differently in
+    the ray-tracing pipeline and in PSDR's compute kernels (rounding-level differences that occasionally flip a sampling
+    decision later in a path). It costs ~10 % of a forward frame."""
+    mode = os.environ.get("FALCOR2_FP_MODE", "precise").strip().lower()
+    if mode not in ("default", "precise", "fast"):
+        raise ValueError(f"FALCOR2_FP_MODE must be default, precise or fast, not {mode!r}")
+    return getattr(spy.SlangFloatingPointMode, mode)
 
 
 def default_device() -> spy.Device:
