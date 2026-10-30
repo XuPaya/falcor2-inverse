@@ -1,11 +1,12 @@
-"""Optimize parameters of a scene file (Mitsuba 3 XML, USD, glTF, OBJ, PLY...), as in Mitsuba's Cornell-box
-tutorial: render a target with the scene's own values, set the chosen parameters to 0.5, and recover them.
+"""Optimize parameters of a scene with a camera and lighting (Mitsuba 3 XML, USD, glTF...), as in Mitsuba's
+Cornell-box tutorial: render a target with the scene's own values, set the chosen parameters to 0.5, and recover them.
 
     python examples/optimize_scene.py                                      # assets/scenes/cornell_box.xml
     python examples/optimize_scene.py scene.usda --params "*.base_color_factor"
     python examples/optimize_scene.py --list                               # the parameters of a scene
 
-Parameters are chosen by key or glob pattern (see Scene.parameters()).
+Parameters are chosen by key or glob pattern (see Scene.parameters()). Bare OBJ/PLY meshes can be inspected
+with --list; add a camera and lighting in a scene before optimizing them.
 """
 
 import argparse
@@ -23,6 +24,10 @@ CORNELL_BOX = ASSETS / "scenes" / "cornell_box.xml"
 def run(path=CORNELL_BOX, patterns=("red.base_color_factor", "green.base_color_factor"), iterations=200, spp=16,
         target_spp=1024, size=256, lr=0.02, out_dir=RESULTS):
     scene = fi.Scene.load(path)
+    if not scene.cameras:
+        raise ValueError("The loaded scene has no camera. Optimization needs a camera and lighting; "
+                         "add them to the scene or use a scene file that supplies them. "
+                         "Use --list to inspect a mesh's parameters without rendering.")
     camera = next(iter(scene.cameras.values()))
     scale = size / max(camera.width, camera.height)  # render at most size x size pixels
     camera.width, camera.height = round(camera.width * scale), round(camera.height * scale)

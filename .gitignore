@@ -5,4 +5,5 @@ __pycache__/
 .temp/
 *.egg-info/
 build/
-tests/
+tests/*
+!tests/test_contact.py

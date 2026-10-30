@@ -89,7 +89,7 @@ def run(iterations=200, spp=8, target_spp=512, out_dir=RESULTS, smoothness=SMOOT
     save_curves(out / "curves.png", {"image loss": history["image_loss"], "rim RMS error": history["rms"]},
                 "shape: loss and RMS distance of rim vertices to the star")
     metrics = {"initial_rms": history["rms"][0], "final_rms": history["rms"][-1],
-               "initial_loss": history["image_loss"][0], "final_loss": float(np.mean(history["image_loss"][-10:]))}
+               "initial_loss": fi.mse(start_image, target).item(), "final_loss": fi.mse(final_image, target).item()}
     save_history(out / "history.json", history, **metrics)
     return metrics
 
