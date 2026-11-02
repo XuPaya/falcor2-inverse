@@ -1,6 +1,6 @@
 # falcor2-inverse
 
-Inverse rendering with falcor2's path-space differentiable renderer (`falcor2.psdr`, branch `psdr-falcor2`) from
+Inverse rendering with falcor2's path-space differentiable renderer (`falcor2.psdr`) from
 PyTorch. Load a scene (Mitsuba 3, USD, glTF, OBJ, PLY) or build one, choose any of its parameters, and optimize
 them in an ordinary PyTorch loop: the renderer is a differentiable PyTorch operation, and every tensor that
 requires gradients gets them, including tensors computed by your own code (networks, reparameterizations).
@@ -15,7 +15,7 @@ with torch.no_grad():
     target = renderer(spp=1024)                             # or a photograph: fi.load_image("target.exr")
 
 params = scene.parameters("red.base_color_factor")         # {key: tensor}
-params["red.base_color_factor"] = torch.full((3,), 0.5, device="cuda", requires_grad=True)
+params["red.base_color_factor"] = torch.full((3,), 0.5, device=target.device, requires_grad=True)
 optimizer = torch.optim.Adam(params.trainable(), lr=0.02)
 for it in range(200):
     loss = fi.mse(renderer(params), target)                # renders with the parameter values
@@ -26,17 +26,39 @@ for it in range(200):
 
 ## Installation
 
-A built falcor2 checkout on branch `psdr-falcor2` and its Python environment, with PyTorch (with CUDA; e.g.
-`pip install torch --index-url https://download.pytorch.org/whl/cu124`). Then, from this repository's root:
+A built falcor2 checkout with PSDR support and its Python environment, with NumPy, Pillow, and a CUDA-enabled
+PyTorch installation for the GPU. Then, from this repository's root:
 
 ```bash
 pip install -e .
 ```
 
-or set `PYTHONPATH` to the repository root. Rendering runs on a D3D12 device; images and parameters are PyTorch
-tensors on the first CUDA device (the CPU without one). PSDR kernels compile the first time a scene type is
+On Ubuntu with a sibling falcor2 checkout whose environment already contains those dependencies:
+
+```bash
+source ../falcor2/.venv/bin/activate
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+Run the example commands below in that environment, or set `PYTHONPATH` to the repository root.
+Rendering uses Vulkan on Linux and D3D12 on Windows (SlangPy's
+platform default); images and parameters are PyTorch tensors on the first CUDA device (the CPU without one).
+To select Vulkan explicitly, pass `device=fi.create_device(device_type=slangpy.DeviceType.vulkan)` to `fi.Scene()`
+or `fi.Scene.load(...)` after importing `slangpy`. PSDR kernels compile the first time a scene type is
 rendered (seconds for StandardMaterial scenes, a few minutes with OpenPBRMaterial) and are cached in
 `.shader-cache/`; the cache does not track `#include`d headers, so delete it after editing them.
+
+PSDR and `SelfContact` use inline ray queries when supported and otherwise use a ray-tracing pipeline. On
+Vulkan this means the GPU and driver must expose either `VK_KHR_ray_query` or `VK_KHR_ray_tracing_pipeline`.
+The PSDR fallback supports the primal image and all four gradient terms, including the secondary term's
+photon search. `SelfContact` supports barrier gradients, safe step bounds, and intersection counts on both paths.
+
+Scenes can combine `StandardMaterial`, `OpenPBRMaterial`, and `SpongeCakeMaterial`. With the Vulkan pipeline
+fallback, scenes containing all three use separate BSDF backward kernels to avoid a failure of the combined
+shader. Shared environment and light-source derivatives are accumulated once. The fallback caches shaders
+for the scene's material families; the first mixed-material run can take several minutes to compile.
+`fi.Renderer` rebuilds them after structural scene changes. Direct `PSDR` users must recreate it when adding
+a new material family.
 
 ## Scenes
 
@@ -46,22 +68,32 @@ rendered (seconds for StandardMaterial scenes, a few minutes with OpenPBRMateria
 |---|---|
 | USD (`.usd`, `.usda`, `.usdc`, `.usdz`), glTF (`.gltf`, `.glb`), falcor2 Python scenes (`.py`) | falcor2's importers |
 | Mitsuba 3 (`.xml`) | `falcor2_inverse.loaders.mitsuba`: shapes (obj, ply, serialized, rectangle, cube, sphere, disk), BSDFs as StandardMaterials (diffuse, plastic, conductor, dielectric and their rough variants, principled, twosided, normalmap), bitmap and checkerboard textures, area, point, spot, directional, envmap and constant emitters, perspective cameras; `Scene.metadata` holds the integrator's path length and the sampler's spp. |
-| Meshes (`.obj`, `.ply`, Mitsuba `.serialized`) | one mesh with a gray material |
+| Meshes (`.obj`, `.ply`, Mitsuba `.serialized`) | one mesh with a gray material, without cameras or lights |
+
+Add a camera and lighting before rendering a bare mesh import. `examples/optimize_scene.py` expects a scene
+file containing a camera and lighting; use `--list` to inspect the parameters of either a scene or a bare mesh.
 
 Scenes can also be built (or extended) in Python:
 
 ```python
+from pathlib import Path
+import numpy as np
+import falcor2 as f2
+import falcor2_inverse as fi
+
 scene = fi.Scene()
 red = scene.add_material("red", base_color_factor=(0.8, 0.2, 0.1), roughness_factor=0.4)    # StandardMaterial
 blue = scene.add_material("blue", "openpbr", base_color=(0.2, 0.4, 0.8), specular_roughness=0.3)
+image = np.full((16, 16, 3), 0.6, dtype=np.float32)
 floor = scene.add_material("floor", base_color_texture=image)                               # (H, W, 3) array
 positions, faces, uv = fi.quad((0, 0, 0), (2, 0, 0), (0, 2, 0))
 scene.add_mesh("floor", positions, faces, floor, texcoords=uv)
-mesh = fi.read_mesh("bunny.obj")                                                            # or fi.sphere(...)
+mesh = fi.read_mesh("assets/meshes/bunny.obj")                                               # or fi.sphere(...)
 scene.add_mesh("bunny", mesh["positions"], mesh["faces"], red, translation=(0, 0, 0.3), rotation=(0, 0, 0.5))
 scene.add_point_light("lamp", position=(1, -1, 2), intensity=(2, 2, 2))
 scene.add_rect_light("panel", position=(0, 0, 2), radiance=(5, 5, 5), size=0.5)             # also disk, sphere,
-scene.add_env_map("sky", "sky.exr", rotation=(np.pi / 2, 0, 0))                             # distant, constant
+sky = Path(f2.__file__).resolve().parents[1] / "data/assets/envmaps/aerodynamics_workshop_512.hdr"
+scene.add_env_map("sky", sky, rotation=(np.pi / 2, 0, 0))                                  # distant, constant
 scene.add_camera("camera", eye=(0, -3, 2), target=(0, 0, 0.3), fov_y=40, resolution=(512, 512))
 ```
 
@@ -78,8 +110,10 @@ a `ParameterDict` of float32 tensors, keyed `"<object>.<parameter>"`:
 |---|---|
 | `<mesh>.vertex_positions` | object-space vertices (V, 3), in the geometry's stored vertex order (falcor2 may reorder vertices: `scene.mesh_arrays(name)` gives the matching triangles) |
 | `<mesh>.translation`, `.rotation`, `.scale` | the mesh instance's transform (3): rotations are axis-angle vectors (radians) |
-| `<material>.<factor>` | StandardMaterial: `base_color_factor`, `metallic_factor`, `roughness_factor`, `ior`, `emissive_factor`, transmission factors, `normal_texture_scale`; OpenPBRMaterial: its 30 attributes (`base_color`, `specular_roughness`, ...) |
-| `<material>.<texture>_texture` | linear RGBA texels (H, W, 4) of a texture: StandardMaterial base color, metallic-roughness, emissive, normal, transmission; any OpenPBR attribute's texture |
+| `<material>.<factor>` (StandardMaterial) | `base_color_factor`, `metallic_factor`, `roughness_factor`, `ior`, `emissive_factor`, transmission factors, `normal_texture_scale` |
+| `<material>.<factor>` (OpenPBRMaterial) | attributes such as `base_color`, `specular_roughness`, subsurface factors, and `normal_texture_scale` |
+| `<material>.<factor>` (SpongeCakeMaterial) | `albedo`, `thickness`, `roughness`, `top_albedo`, `top_thickness`, `top_roughness`, `base_color`, `base_weight`, `normal_texture_scale` |
+| `<material>.<texture>_texture` | linear RGBA texels (H, W, 4): StandardMaterial base color, metallic-roughness, emissive, normal, transmission; OpenPBR attribute and normal maps; SpongeCake albedo, top albedo, base color, and normal maps |
 | `<light>.intensity` / `.radiance` | point light intensity, area light radiance (3) |
 | `<light>.translation` | an analytic light's position (3) |
 | `<env map>.intensity`, `.rotation`, `.texture` | an environment map's intensity (3), rotation (3) and RGBA texels (H, W, 4) |
@@ -120,31 +154,41 @@ Changes of the scene's structure (`scene.set_mesh()`, new objects) are picked up
   Inverse Rendering of Geometry"): optimize `u = steps.to_differential(vertices)` and render
   `steps.from_differential(u)`. `fi.subdivide` refines a mesh between stages; `fi.laplacian` and `fi.chamfer`
   are there for regularizers and evaluation.
-- Self-contact: `fi.SelfContact(faces, vertex_count, dhat)` keeps a mesh from intersecting itself while it is
-  optimized, in the spirit of incremental potential contact (IPC): `contact.barrier(vertices)` adds a log
+- Self-contact: `fi.SelfContact(faces, vertex_count, dhat)` handles vertex-triangle contact during mesh
+  optimization, in the spirit of incremental potential contact (IPC): `contact.barrier(vertices)` adds a log
   barrier's gradient for vertex-triangle pairs closer than dhat, and `contact.step_bound(vertices, step)` shortens
-  steps that would pass a vertex through a triangle (`examples/multipose.py --contact`). Its proximity queries use
-  hardware ray tracing: a few ms per iteration at 10k vertices.
+  steps that would pass a vertex through a triangle (`examples/multipose.py --contact`). Its proximity queries
+  run on the GPU through inline ray queries or a ray-tracing pipeline, selected automatically. Edge-edge
+  contacts are not handled.
 - Images: `fi.load_image`, `fi.save_image` (EXR/HDR linear, PNG/JPEG tonemapped), `falcor2_inverse.images` for
   labeled frames and videos of optimizations.
 
 ## Examples
 
-Each example renders targets with the true parameters, starts from wrong ones and optimizes them, writing videos,
-images, loss curves and `history.json` to `results/<name>/`:
+The optimization examples render targets with the true parameters, start from wrong ones, and optimize them.
+Most write videos, images, loss curves, and `history.json` to `results/<name>/`. `quickstart` writes `images.png`
+and prints parameter errors; `validate_backend` writes a comparison image and diagnostics JSON.
 
 ```bash
 python examples/quickstart.py
+python examples/validate_backend.py             # small forward/backward and optimization check
+python examples/validate_backend.py --mixed-materials  # fit all three material families together
 python examples/isolated.py shadow --shape bunny --subdivisions 4 --iterations 1000 2000 --contact
-python examples/run_all.py                      # all of them, with their default settings
+python examples/run_all.py                      # all optimization examples, with default settings
 ```
+
+`validate_backend.py` checks finite images and gradients, exercises the four gradient terms, and fits material
+colors to a rendered target. `--mixed-materials` fits Standard, OpenPBR, and SpongeCake colors in one scene.
+Reports and comparison images go to `results/validate_backend/` or `results/validate_backend_mixed/`; use
+`--output` to choose another directory. On a sibling falcor2 checkout's Linux environment, run it from this
+repository with `PYTHONPATH=. ../falcor2/.venv/bin/python examples/validate_backend.py`.
 
 | Example | Recovers | PSDR terms |
 |---|---|---|
 | `quickstart` | a sphere's color, roughness and position and a point light's position | all four |
 | `appearance` | `materials`: StandardMaterial and OpenPBRMaterial colors and roughness; `lights`: point-light intensity, rect-light radiance, emissive factor | interior |
 | `translation` | the (x, y) position of a box on a floor | all four |
-| `shape` | the rim of a planar mesh (circle to star), with a smoothness regularizer | primary, pixel, secondary |
+| `shape` | the rim of a planar mesh (circle to star), with a smoothness regularizer | all four |
 | `multipose` | a cube, bumpy sphere or bunny from a sphere (large steps, one refinement) in 12 poses: shading, sun shadow, glossy mirror, environment map | all four |
 | `isolated` | the same shapes from their sun shadows alone (`shadow`) or their reflection in a mirror alone (`mirror`) | secondary (and interior) |
 | `texture` | a 256 x 256 base color texture from three views | interior (texels) |
@@ -153,11 +197,19 @@ python examples/run_all.py                      # all of them, with their defaul
 | `moving_light` | the positions of a point light and a rect light from shading and shadows | interior, secondary |
 | `optimize_scene` | parameters of a scene file (Mitsuba's Cornell-box tutorial: the wall colors), chosen by pattern | as needed |
 
-`examples/render_meshes.py` renders the results of the shape examples next to their targets. `examples/timing.py`
+`examples/render_meshes.py` renders saved meshes from `multipose` and `isolated` next to their targets; it expects
+their `mesh.npz` and `history.json` files. `examples/timing.py`
 times an optimization iteration (render, loss, backward, step) at 512 x 512, of the bunny's material or of its
 vertices with all four PSDR terms and with each term alone.
 
-Results with the default settings (surface distances: Chamfer distance relative to the target's bounding-box
+Ubuntu validation (2026-10-30): all 13 optimization configurations registered by `run_all.py` completed with
+their default iteration counts, image sizes, and sampling settings on Ubuntu 24.04.4 LTS (aarch64), an NVIDIA
+GB300, Vulkan/TraceRay, and CUDA PyTorch tensors. A shortened run of all 13 entries also passed together in one
+process. Both backend validators, the timing example, mesh rendering,
+and the README Python snippets also ran successfully. The documented bunny/contact command completed all
+3,000 updates with zero crossing edges. Detailed local reports and outputs are in `results/ubuntu_validation/`.
+
+Reference measurements from earlier runs (surface distances: Chamfer distance relative to the target's bounding-box
 diagonal; "crossing edges": edges that pierce the mesh, i.e. self-intersections):
 
 | Example | Initial | Final |
@@ -198,11 +250,22 @@ diagonal; "crossing edges": edges that pierce the mesh, i.e. self-intersections)
 python -m pytest tests -q
 ```
 
-`tests/test_psdr.py` checks falcor2's PSDR: its derivatives of every kind of parameter (StandardMaterial and OpenPBR
-factors and textures, normal maps, vertices, light emission and translation, environment map texels, intensity and
-rotation) and of every term against finite differences, forward against backward mode, antithetic sampling, and
-the primal image against falcor2's reference path tracer. The first run compiles many kernel variants (about half
-an hour).
+`tests/test_contact.py` checks `SelfContact` against CPU references and finite differences, including CUDA
+autograd, moving triangles, candidate counts, edge crossings, and empty meshes. Inline-query comparison is
+skipped when that feature is unavailable.
+
+The PSDR traversal and mixed-material regressions live in the sibling falcor2 checkout:
+
+```bash
+cd ../falcor2
+.venv/bin/python -m pytest -q tests/python/render/test_psdr_trace_ray.py \
+    tests/python/render/test_psdr_photon_gather.py tests/python/render/test_psdr_edges.py \
+    tests/python/render/test_psdr_material_batches.py
+```
+
+These exercise the TraceRay fallback, photon search, material and light finite differences, forward/reverse
+geometry derivatives, shared environment contributions, light tracing, and gradient accumulation. The first
+run compiles several large shader variants and can take tens of minutes.
 
 ## Layout
 

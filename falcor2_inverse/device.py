@@ -1,4 +1,4 @@
-"""The falcor2 device (D3D12) and the PyTorch device that parameters and images live on."""
+"""The falcor2 graphics device and the PyTorch device that parameters and images live on."""
 
 import os
 from pathlib import Path
@@ -11,18 +11,19 @@ from falcor2.editor.utils import get_slang_include_paths
 _DEVICE = None
 
 
-def create_device(shader_cache: bool = True) -> spy.Device:
-    """D3D12 device with falcor2's shader include paths and a persistent shader cache (.shader-cache/).
+def create_device(shader_cache: bool = True, *, device_type: spy.DeviceType = spy.DeviceType.automatic) -> spy.Device:
+    """Device with falcor2's shader include paths and a persistent shader cache (.shader-cache/).
+
+    SlangPy selects Vulkan on Linux and D3D12 on Windows by default. Pass device_type to select a backend explicitly.
 
     PSDR kernels for scenes with OpenPBR materials take minutes to compile (more with shader debug info, which
-    this device leaves off); the cache compiles each of them once.  One scene configuration (material types, light
-    sampler, normal maps) takes ~14 MiB with all PSDR kernels but ~8 min to compile, and slangpy's default cache
-    size (128 MiB, eviction from 70%) holds only ~6 of them, so experiments evicted and recompiled each other's
-    kernels.  1 GiB holds ~50; the LMDB file grows only as entries are written.
+    this device leaves off). Cache usage varies with material families, light sampler, normal maps, and enabled
+    derivative kernels. A 1 GiB cache reduces eviction and recompilation when experiments use different
+    configurations; its LMDB file grows only as entries are written.
     """
     root = Path(__file__).resolve().parents[1]
     return spy.Device(
-        type=spy.DeviceType.d3d12,
+        type=device_type,
         shader_cache_path=root / ".shader-cache" if shader_cache else None,
         shader_cache_size=1 << 30,
         compiler_options=spy.SlangCompilerOptions({

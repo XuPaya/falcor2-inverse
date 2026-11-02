@@ -39,14 +39,18 @@ class Renderer:
     primal: False returns a zero image instead of rendering it, for callers that only backpropagate an adjoint they
     computed elsewhere (e.g. at a converged forward render); the gradients are unchanged (default True).
     accumulate: see accumulating().
+    ray_epsilon: PSDR's ray offset (default: PSDR's, max(1e-5, 1e-6 x scene extent)). Larger values stop primary-edge
+    rays that graze the occluder's own faces from dropping samples on finely tessellated meshes (see
+    falcor2/docs/psdr-primary-edge-grazing-bias.md), at the cost of light leaks near contacts in multi-bounce renders.
     """
 
     def __init__(self, scene, camera=None, spp=4, grad_spp=None, max_bounces=2, terms=None, photon_radius=None,
-                 seed=0, light_sampler=None, vertex_grad_clamp=None, check_visibility=False, photon_count=None):
+                 seed=0, light_sampler=None, vertex_grad_clamp=None, check_visibility=False, photon_count=None,
+                 ray_epsilon=None):
         self.scene, self.spp, self.grad_spp, self.max_bounces = scene, spp, grad_spp, max_bounces
         self.terms, self.photon_radius, self.seed, self.light_sampler = terms, photon_radius, seed, light_sampler
         self.vertex_grad_clamp, self.check_visibility = vertex_grad_clamp, check_visibility
-        self.photon_count = photon_count
+        self.photon_count, self.ray_epsilon = photon_count, ray_epsilon
         self.light_tracing = None
         self.primal, self.accumulate = True, False
         self.camera = self._camera(camera) if camera is not None else None
@@ -76,6 +80,7 @@ class Renderer:
         psdr = self._psdr.get(size)
         if psdr is None:
             psdr = self._psdr[size] = PSDR(scene.device, scene.f2, camera, max_bounces=self.max_bounces,
+                                           ray_epsilon=self.ray_epsilon,
                                            photon_radius=self.photon_radius, light_sampler=self.light_sampler,
                                            vertex_grad_clamp=self.vertex_grad_clamp,
                                            check_visibility=self.check_visibility,
@@ -209,7 +214,8 @@ class _Call:
                 renderer._pending[id(psdr)] = (psdr, owners, {k: (v, _slots(psdr, params[k]))
                                                               for k, v in leaves.items()})
             return [None] * len(self.keys)
-        grad_vertex, grad_params = psdr.backward(dl_di, spp=spp, seed=2 * self.seed + 1, terms=terms)
+        grad_vertex, grad_params = psdr.backward(dl_di, spp=spp, seed=2 * self.seed + 1, terms=terms,
+                                                 frame_gradients=any(params[k].turns_frames for k in wanted))
         # Slot-based gradients go to the values' device in one transfer, each key taking its slice there.
         grads, uploaded = [], {}
         for k, v, need in zip(self.keys, values, needs_grad):

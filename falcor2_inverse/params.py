@@ -16,7 +16,7 @@ import torch
 import falcor2 as f2
 from falcor2.psdr import MATERIAL_PARAMS, MATERIAL_TEXTURES
 
-from falcor2_inverse.geometry import tangents, vertex_normals
+from falcor2_inverse.geometry import frame_vertex_grad, tangents, vertex_normals
 from falcor2_inverse.transforms import (axis_angle_to_matrix, axis_angle_to_quaternion, quaternion_to_axis_angle,
                                         rotation_vector_of)
 
@@ -94,9 +94,10 @@ def _as_torch(array, like: torch.Tensor) -> torch.Tensor:
 
 class Param:
     """A scene parameter. ``geometric`` parameters move surfaces or lights, which needs PSDR's boundary terms;
-    ``moves_surfaces`` ones change the meshes' edges."""
+    ``moves_surfaces`` ones change the meshes' edges; ``turns_frames`` ones change shading frames (their gradients
+    need PSDR's frame gradients)."""
 
-    geometric = moves_surfaces = False
+    geometric = moves_surfaces = turns_frames = False
 
     def __init__(self, scene, key):
         self.scene, self.key = scene, key
@@ -114,13 +115,18 @@ class Param:
 class VertexPositions(Param):
     """Object-space vertex positions (V, 3) of a mesh (sub-mesh 0), in the geometry's stored vertex order (falcor2
     may reorder vertices when a mesh is set: see Scene.mesh_arrays()). Writing them recomputes vertex normals and
-    tangents unless the scene's ``recompute_normals`` is False."""
+    tangents unless the scene's ``recompute_normals`` is False; their gradients then include the shading frames'
+    (PSDR's frame gradients chained through the recomputed normals and tangents)."""
 
     geometric = moves_surfaces = True
 
     def __init__(self, scene, key, instance):
         super().__init__(scene, key)
         self.instance, self.geometry = instance, instance.geometry
+
+    @property
+    def turns_frames(self):
+        return self.scene.recompute_normals
 
     def read(self):
         return np.asarray(self.geometry.positions(0), np.float32)
@@ -134,7 +140,14 @@ class VertexPositions(Param):
             self.geometry.set_tangents(0, tangents(normals).astype(np.float32))
 
     def grad(self, psdr, grad_vertex, grad_params, value):
-        return _as_torch(grad_vertex[psdr.vertex_range(self.instance)], value)
+        rows = psdr.vertex_range(self.instance)
+        grad = _as_torch(grad_vertex[rows], value)
+        frame = psdr.frame_gradients()
+        if self.scene.recompute_normals and frame is not None:
+            faces = np.asarray(self.geometry.indices(0), np.int64)
+            grad = grad + frame_vertex_grad(value.detach().cpu().numpy(), faces, frame[0][rows], frame[1][rows],
+                                            device=value.device).to(grad)
+        return grad
 
 
 class MaterialFactor(Param):
@@ -254,17 +267,33 @@ class MeshTransform(EntityTransform):
         super().__init__(scene, key, instance.entity, component)
         self.instance = instance
 
+    @property
+    def turns_frames(self):
+        return self.component != "translation"
+
     def grad(self, psdr, grad_vertex, grad_params, value):
         if self.scene.instance_count(self.instance.geometry) > 1:
             raise NotImplementedError(f"{self.key}: the geometry is shared by several instances")
         # Object-space vertex gradients are M^T times world-space ones.
-        g_object = np.asarray(grad_vertex[psdr.vertex_range(self.instance)], np.float64)
+        rows = psdr.vertex_range(self.instance)
+        g_object = np.asarray(grad_vertex[rows], np.float64)
         g_world = torch.as_tensor(g_object @ np.linalg.inv(_matrix(self.entity)[:3, :3]))
         x_object = torch.as_tensor(np.asarray(self.instance.geometry.positions(0), np.float64))
+        frame = psdr.frame_gradients() if self.turns_frames else None
         with torch.enable_grad():
             v = value.detach().to(torch.float64).cpu().requires_grad_()
             m = self.world_matrix(v)
-            (grad,) = torch.autograd.grad((g_world * (x_object @ m[:3, :3].T + m[:3, 3])).sum(), v)
+            objective = (g_world * (x_object @ m[:3, :3].T + m[:3, 3])).sum()
+            if frame is not None:
+                # The shading frames turn with the instance (world normals M^-T n, tangents M t): as changes of the
+                # stored object-space frames, whose gradients hold M at its value M0, M0^T M^-T n and M0^-1 M t.
+                a, a0 = m[:3, :3], m[:3, :3].detach()
+                n = torch.as_tensor(np.asarray(self.instance.geometry.normals(0), np.float64))
+                t = torch.as_tensor(np.asarray(self.instance.geometry.tangents(0), np.float64))
+                g_n, g_t = (torch.as_tensor(np.asarray(g[rows], np.float64)) for g in frame)
+                objective = objective + (g_n * (n @ torch.linalg.inv(a) @ a0)).sum()
+                objective = objective + (g_t * (t @ a.T @ torch.linalg.inv(a0).T)).sum()
+            (grad,) = torch.autograd.grad(objective, v)
         return grad.to(value)
 
 
