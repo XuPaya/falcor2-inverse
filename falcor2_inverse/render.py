@@ -214,7 +214,8 @@ class _Call:
                 renderer._pending[id(psdr)] = (psdr, owners, {k: (v, _slots(psdr, params[k]))
                                                               for k, v in leaves.items()})
             return [None] * len(self.keys)
-        grad_vertex, grad_params = psdr.backward(dl_di, spp=spp, seed=2 * self.seed + 1, terms=terms)
+        grad_vertex, grad_params = psdr.backward(dl_di, spp=spp, seed=2 * self.seed + 1, terms=terms,
+                                                 frame_gradients=any(params[k].turns_frames for k in wanted))
         # Slot-based gradients go to the values' device in one transfer, each key taking its slice there.
         grads, uploaded = [], {}
         for k, v, need in zip(self.keys, values, needs_grad):

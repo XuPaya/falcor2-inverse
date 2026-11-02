@@ -23,6 +23,25 @@ def tangents(normals) -> np.ndarray:
     return t / np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-12)
 
 
+def frame_vertex_grad(positions, faces, grad_normals, grad_tangents, device=None) -> torch.Tensor:
+    """Vertex gradient (V, 3, float64) of the vertex normals (vertex_normals()) and tangents (tangents()) recomputed
+    from the positions, given gradients of those normals and tangents (V, 3 each; e.g. PSDR's frame gradients)."""
+    p = torch.as_tensor(np.asarray(positions, np.float64), device=device).requires_grad_()
+    f = torch.as_tensor(np.asarray(faces, np.int64), device=p.device).reshape(-1, 3)
+    with torch.enable_grad():
+        q = p[f]
+        n = torch.linalg.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0])
+        normals = torch.zeros_like(p).index_add(0, f.reshape(-1), n.repeat_interleave(3, 0))
+        normals = normals / torch.linalg.norm(normals, dim=1, keepdim=True).clamp_min(1e-12)
+        z, x = normals.new_tensor([0.0, 0.0, 1.0]), normals.new_tensor([1.0, 0.0, 0.0])
+        up = torch.where(normals[:, 2:3].detach().abs() < 0.9, z, x).expand_as(normals)
+        t = torch.linalg.cross(up, normals)
+        t = t / torch.linalg.norm(t, dim=1, keepdim=True).clamp_min(1e-12)
+        grads = [torch.as_tensor(np.asarray(g, np.float64), device=p.device) for g in (grad_normals, grad_tangents)]
+        torch.autograd.backward([normals, t], grads)
+    return p.grad
+
+
 def mesh_edges(faces) -> np.ndarray:
     """Unique undirected edges (E, 2)."""
     faces = np.asarray(faces, np.int64)
